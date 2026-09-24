@@ -1,0 +1,161 @@
+#!/usr/bin/python3
+"""
+TOTP authenticator backend for the Omarchy totp plugin.
+
+Commands:
+  totp list                    → JSON { accounts: [...], remaining: N }
+  totp add NAME SECRET [ISSUER] → JSON { ok: true, id: "..." }
+  totp delete ID               → JSON { ok: true }
+
+Secrets are stored in ~/.config/omarchy/totp/accounts.json (mode 0600).
+No third-party dependencies — uses only Python's standard library.
+"""
+
+import sys
+import json
+import hmac
+import hashlib
+import struct
+import time
+import base64
+import os
+import uuid
+
+CONFIG_DIR = os.path.expanduser("~/.config/omarchy/totp")
+ACCOUNTS_FILE = os.path.join(CONFIG_DIR, "accounts.json")
+
+# Input caps so a misbehaving caller cannot create an unbounded file.
+_MAX_NAME   = 128
+_MAX_SECRET = 200   # 160-char Base32 = 100-byte key; headroom for whitespace
+_MAX_ISSUER = 128
+_MAX_ACCOUNTS = 200
+
+
+def totp_code(secret: str, period: int = 30) -> str:
+    cleaned = secret.upper().replace(" ", "").replace("-", "")
+    if not cleaned:
+        raise ValueError("secret is empty after stripping whitespace/dashes")
+    pad = (8 - len(cleaned) % 8) % 8
+    key = base64.b32decode(cleaned + "=" * pad)
+    counter = int(time.time()) // period
+    msg = struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    return str(code % 1_000_000).zfill(6)
+
+
+def time_remaining(period: int = 30) -> int:
+    elapsed = int(time.time()) % period
+    remaining = period - elapsed
+    return remaining if remaining < period else period
+
+
+def _is_valid_id(account_id: str) -> bool:
+    """IDs are 8 lowercase hex characters produced by uuid4().hex[:8]."""
+    return len(account_id) == 8 and all(c in "0123456789abcdef" for c in account_id)
+
+
+def load_accounts() -> list:
+    if not os.path.exists(ACCOUNTS_FILE):
+        return []
+    with open(ACCOUNTS_FILE) as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        return []
+    # Validate each entry; drop malformed rows silently.
+    valid = []
+    for acc in data:
+        if (isinstance(acc, dict)
+                and isinstance(acc.get("id"), str)
+                and isinstance(acc.get("name"), str)
+                and isinstance(acc.get("secret"), str)):
+            valid.append(acc)
+    return valid
+
+
+def save_accounts(accounts: list) -> None:
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(ACCOUNTS_FILE, "w") as fh:
+        json.dump(accounts, fh, indent=2)
+    # Secrets live here — only the owning user should be able to read the file.
+    os.chmod(ACCOUNTS_FILE, 0o600)
+
+
+def cmd_list() -> None:
+    accounts = load_accounts()
+    remaining = time_remaining()
+    rows = []
+    for acc in accounts:
+        try:
+            code = totp_code(acc["secret"])
+        except Exception:
+            code = "------"
+        rows.append({
+            "id": acc["id"],
+            "name": acc["name"],
+            "issuer": acc.get("issuer", ""),
+            "code": code,
+        })
+    print(json.dumps({"accounts": rows, "remaining": remaining}))
+
+
+def cmd_add(name: str, secret: str, issuer: str = "") -> None:
+    name   = name[:_MAX_NAME].strip()
+    secret = secret[:_MAX_SECRET].strip()
+    issuer = issuer[:_MAX_ISSUER].strip()
+
+    if not name:
+        print("Account name must not be empty", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        totp_code(secret)
+    except Exception:
+        print("Invalid secret key — must be a non-empty Base32 string", file=sys.stderr)
+        sys.exit(1)
+
+    accounts = load_accounts()
+    if len(accounts) >= _MAX_ACCOUNTS:
+        print(f"Account limit ({_MAX_ACCOUNTS}) reached", file=sys.stderr)
+        sys.exit(1)
+
+    new_id = uuid.uuid4().hex[:8]
+    accounts.append({"id": new_id, "name": name, "secret": secret, "issuer": issuer})
+    save_accounts(accounts)
+    print(json.dumps({"ok": True, "id": new_id}))
+
+
+def cmd_delete(account_id: str) -> None:
+    if not _is_valid_id(account_id):
+        print("Invalid account ID", file=sys.stderr)
+        sys.exit(1)
+    accounts = load_accounts()
+    accounts = [a for a in accounts if a["id"] != account_id]
+    save_accounts(accounts)
+    print(json.dumps({"ok": True}))
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        cmd_list()
+        return
+    cmd = sys.argv[1]
+    if cmd == "list":
+        cmd_list()
+    elif cmd == "add":
+        if len(sys.argv) < 4:
+            print("Usage: totp add NAME SECRET [ISSUER]", file=sys.stderr)
+            sys.exit(1)
+        cmd_add(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else "")
+    elif cmd == "delete":
+        if len(sys.argv) < 3:
+            print("Usage: totp delete ID", file=sys.stderr)
+            sys.exit(1)
+        cmd_delete(sys.argv[2])
+    else:
+        print(f"Unknown command: {cmd}", file=sys.stderr)
+        sys.exit(1)
+
+
+main()

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.hpolthof.totp",
+  "name": "Authenticator",
+  "version": "1.0.0",
+  "author": "Paul Olthof",
+  "license": "MIT",
+  "description": "TOTP authenticator for developers. Store test-account secrets locally and copy fresh codes in one click — no phone needed.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Authenticator",
+    "description": "Generates TOTP codes from locally-stored secrets. Designed for developers who manage many test accounts.",
+    "category": "Development",
+    "aliases": ["totp", "mfa", "2fa", "authenticator", "otp"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

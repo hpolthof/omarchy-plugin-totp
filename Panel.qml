@@ -144,7 +144,7 @@ Panel {
             text: Model.GLYPH.shield
             color: root.foreground
             font.family: Style.font.family
-            font.pixelSize: Style.font.icon
+            font.pixelSize: Style.font.iconLarge
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
           }

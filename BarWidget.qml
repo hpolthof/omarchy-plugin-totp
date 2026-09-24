@@ -52,8 +52,10 @@ BarWidget {
     root.busy = true
     root.lastError = ""
     root.injectPanel()
-    var args = [root.binPath, "add", String(name), String(secret)]
+    var args = [root.binPath, "add", String(name)]
     if (issuer && String(issuer).trim() !== "") args.push(String(issuer))
+    // Secret goes over stdin, never argv, so it does not appear in process listings.
+    actionProc.pendingSecret = String(secret)
     actionProc.command = args
     actionProc.running = true
   }
@@ -110,9 +112,15 @@ BarWidget {
 
   Process {
     id: actionProc
+    property string pendingSecret: ""
     property string errText: ""
+    stdinEnabled: true
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: actionProc.errText = text }
+    onStarted: {
+      write(pendingSecret + "\n")
+      pendingSecret = ""
+    }
     onExited: function(code) {
       if (code !== 0) root.lastError = Model.clean(actionProc.errText) || "Operation failed"
       actionProc.errText = ""
